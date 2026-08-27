@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hydros Mission Control</title>
+    <style>
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            background-color: #121212; 
+            color: #ffffff; 
+            text-align: center; 
+            padding: 20px;
+        }
+        h1 { color: #00d2ff; }
+        .control-panel {
+            background-color: #1e1e1e;
+            border: 1px solid #333;
+            border-radius: 10px;
+            padding: 20px;
+            max-width: 600px;
+            margin: 20px auto;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.5);
+        }
+        .panel { 
+            display: none; 
+            margin-top: 20px; 
+            padding: 20px; 
+            background-color: #2a2a2a; 
+            border-radius: 8px; 
+        }
+        .active-panel { display: block; }
+        .nav-button {
+            padding: 10px 15px;
+            margin: 5px;
+            cursor: pointer;
+            background-color: #333;
+            color: white;
+            border: 1px solid #555;
+            border-radius: 4px;
+            transition: 0.3s;
+        }
+        .nav-button:hover, .nav-button.active {
+            background-color: #00d2ff;
+            color: #000;
+            border-color: #00d2ff;
+            font-weight: bold;
+        }
+        .action-button {
+            padding: 12px 24px;
+            margin-top: 15px;
+            cursor: pointer;
+            background-color: #28a745;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: bold;
+        }
+        .action-button:hover { background-color: #218838; }
+        video { 
+            width: 100%; 
+            max-width: 480px; 
+            border: 2px solid #555; 
+            border-radius: 8px; 
+            background-color: #000;
+        }
+        input[type="file"] { 
+            padding: 10px; 
+            margin: 10px; 
+            background-color: #333;
+            color: white;
+            border: 1px solid #555;
+            border-radius: 4px;
+            width: 80%;
+        }
+        #result_image {
+            max-width: 100%;
+            border-radius: 8px;
+            margin-top: 15px;
+            border: 2px solid #00d2ff;
+            display: none;
+        }
+        #sat_status_text {
+            color: #00d2ff;
+            font-weight: bold;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>🛰️ Hydros Ground Station</h1>
+
+    <div class="control-panel">
+        <!-- 1. The Mode Selectors -->
+        <div id="nav-container">
+            <button class="nav-button active" onclick="switchMode('webcam_panel', this)">📷 Web_Cam</button>
+            <button class="nav-button" onclick="switchMode('manual_panel', this)">📁 Manual_Input</button>
+            <button class="nav-button" onclick="switchMode('sat_panel', this)">🛰️ Sat_Cam</button>
+        </div>
+
+        <!-- 2. Web_Cam Panel -->
+        <div id="webcam_panel" class="panel active-panel">
+            <h3>Live Webcam Feed</h3>
+            <video id="webcam_video" autoplay playsinline></video>
+            <br>
+            <button class="action-button" onclick="captureAndSend()">Capture & Analyze</button>
+            <canvas id="webcam_canvas" style="display:none;"></canvas>
+        </div>
+
+        <!-- 3. Manual_Input Panel -->
+        <div id="manual_panel" class="panel">
+            <h3>Manual Image Upload</h3>
+            <p>Upload a local terrain image for analysis.</p>
+            <input type="file" id="manual_file_input" accept="image/png, image/jpeg, image/jpg">
+            <br>
+            <button class="action-button" onclick="uploadManual()">Upload & Analyze</button>
+        </div>
+
+        <!-- 4. Sat_Cam Panel -->
+        <div id="sat_panel" class="panel">
+            <h3>Satellite Telemetry Feed</h3>
+            <p>Automatically analyzing the newest telemetry image from the buffer...</p>
+            <p id="sat_status_text">Awaiting activation...</p>
+            <button class="action-button" onclick="autoFetchLatestSatFile()">Fetch Next Image</button>
+        </div>
+    </div>
+
+    <!-- 5. Display Results -->
+    <div class="control-panel">
+        <h2>Analysis Results</h2>
+        <h3 id="result_text" style="color: #ccc;">Awaiting telemetry data...</h3>
+        <img id="result_image" alt="Analyzed Telemetry" />
+    </div>
+
+    <script>
+        // --- UI TOGGLE LOGIC ---
+        function switchMode(panelId, btnElement) {
+            // Update navigation button styles
+            document.querySelectorAll('.nav-button').forEach(btn => btn.classList.remove('active'));
+            btnElement.classList.add('active');
+
+            // Hide all panels and show the requested one
+            document.querySelectorAll('.panel').forEach(p => p.classList.remove('active-panel'));
+            document.getElementById(panelId).classList.add('active-panel');
+            
+            // Manage webcam state based on active panel
+            if (panelId === 'webcam_panel') {
+                startWebcam();
+            } else {
+                stopWebcam();
+            }
+            
+            // Auto-trigger the latest satellite fetch when clicking Sat_Cam
+            if (panelId === 'sat_panel') {
+                autoFetchLatestSatFile();
+            }
+        }
+
+        // --- WEBCAM LOGIC ---
+        let stream = null;
+        async function startWebcam() {
+            const video = document.getElementById('webcam_video');
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                video.srcObject = stream;
+            } catch (err) {
+                console.error("Webcam error:", err);
+                alert("Could not access the laptop webcam. Please check permissions.");
+            }
+        }
+
+        function stopWebcam() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+            }
+        }
+
+        function captureAndSend() {
+            const video = document.getElementById('webcam_video');
+            const canvas = document.getElementById('webcam_canvas');
+            
+            if (!stream) return alert("Webcam is not active.");
+
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            
+            document.getElementById('result_text').innerText = "Processing webcam capture...";
+            
+            canvas.toBlob(blob => {
+                const formData = new FormData();
+                formData.append('image', blob, 'webcam_capture.jpg');
+                
+                fetch('/upload_image', { method: 'POST', body: formData })
+                    .then(response => response.json())
+                    .then(data => checkLatestScan())
+                    .catch(err => console.error("Upload error:", err));
+            }, 'image/jpeg');
+        }
+
+        // --- MANUAL UPLOAD LOGIC ---
+        function uploadManual() {
+            const fileInput = document.getElementById('manual_file_input');
+            if (fileInput.files.length === 0) return alert("Please select a file from your computer first.");
+            
+            document.getElementById('result_text').innerText = "Uploading and processing image...";
+
+            const formData = new FormData();
+            formData.append('image', fileInput.files[0]);
+            
+            fetch('/upload_image', { method: 'POST', body: formData })
+                .then(response => response.json())
+                .then(data => checkLatestScan())
+                .catch(err => console.error("Upload error:", err));
+        }
+
+        // --- SAT_CAM LOGIC (AUTO-FETCH NEWEST) ---
+        function autoFetchLatestSatFile() {
+            document.getElementById('sat_status_text').innerText = "Scanning incoming folder...";
+            document.getElementById('result_text').innerText = "Waiting for data...";
+            
+            fetch('/api/list_incoming_images')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success && data.images.length > 0) {
+                        // The backend already sorts newest first, so we just grab index 0
+                        const newestFile = data.images[0];
+                        document.getElementById('sat_status_text').innerText = `Target locked: ${newestFile}. Running ResNet50...`;
+                        
+                        // Send the file to the analyzer route
+                        fetch('/api/analyze_existing/' + encodeURIComponent(newestFile))
+                            .then(response => response.json())
+                            .then(analysisData => {
+                                if (analysisData.success) {
+                                    checkLatestScan();
+                                } else {
+                                    document.getElementById('sat_status_text').innerText = "Analysis Error: " + analysisData.error;
+                                }
+                            })
+                            .catch(err => console.error("Analysis error:", err));
+                            
+                    } else {
+                        document.getElementById('sat_status_text').innerText = "Folder empty. No unanalyzed telemetry found.";
+                    }
+                })
+                .catch(err => {
+                    console.error("Fetch error:", err);
+                    document.getElementById('sat_status_text').innerText = "Error scanning folder.";
+                });
+        }
+
+        // --- RESULT POLLING LOGIC ---
+        function checkLatestScan() {
+            setTimeout(() => {
+                fetch('/api/latest_scan')
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.image_name) {
+                            let color = "#28a745"; 
+                            if (data.prediction === "landslide" || data.prediction === "flood" || data.prediction === "forest_fire") {
+                                color = "#dc3545"; 
+                            }
+                            
+                            document.getElementById('result_text').innerHTML = 
+                                `Classification: <span style="color:${color}; font-weight:bold;">${data.prediction.toUpperCase()}</span> (${data.confidence}%)`;
+                            
+                            document.getElementById('sat_status_text').innerText = "Analysis Complete. Ready for next image.";
+                            
+                            const imgUrl = `/images/${encodeURIComponent(data.image_name)}?t=${new Date().getTime()}`;
+                            const imgEl = document.getElementById('result_image');
+                            imgEl.src = imgUrl;
+                            imgEl.style.display = "block";
+                        }
+                    })
+                    .catch(err => console.error("Polling error:", err));
+            }, 2500); 
+        }
+
+        // Initialize webcam when the page first loads
+        window.onload = () => {
+            startWebcam();
+        };
+    </script>
+</body>
+</html>
